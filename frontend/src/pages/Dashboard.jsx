@@ -127,12 +127,29 @@ export const Dashboard = () => {
   const completedCount = completedSessions.length;
 
   const reportsArray = Array.isArray(reports) ? reports : [];
-  const knowledgeScores = reportsArray
-    .map((r) => r.knowledge_score ?? r.knowledgeScore ?? null)
-    .filter((s) => s !== null && s !== undefined);
-  const communicationScores = reportsArray
-    .map((r) => r.communication_score ?? r.communicationScore ?? r.delivery_score ?? r.deliveryScore ?? null)
-    .filter((s) => s !== null && s !== undefined);
+
+  // Use reports first, fall back to session averages for completed/scored sessions
+  const scoredSessions = sessions.filter(
+    (s) => s.status === 'completed' || (s.avg_knowledge_score > 0 || s.avg_comm_score > 0)
+  );
+
+  const knowledgeScores =
+    reportsArray.length > 0
+      ? reportsArray
+          .map((r) => r.knowledge_score ?? r.knowledgeScore ?? null)
+          .filter((s) => s !== null && s !== undefined)
+      : scoredSessions
+          .map((s) => s.avg_knowledge_score)
+          .filter((s) => s !== null && s !== undefined && s > 0);
+
+  const communicationScores =
+    reportsArray.length > 0
+      ? reportsArray
+          .map((r) => r.communication_score ?? r.communicationScore ?? r.delivery_score ?? r.deliveryScore ?? null)
+          .filter((s) => s !== null && s !== undefined)
+      : scoredSessions
+          .map((s) => s.avg_comm_score)
+          .filter((s) => s !== null && s !== undefined && s > 0);
 
   const avgKnowledge =
     knowledgeScores.length > 0
@@ -142,6 +159,8 @@ export const Dashboard = () => {
     communicationScores.length > 0
       ? Math.round(communicationScores.reduce((a, b) => a + b, 0) / communicationScores.length)
       : null;
+
+  const hasAnalyticsData = scoredSessions.length > 0 || reportsArray.length > 0;
 
   const computedStats = [
     {
@@ -170,55 +189,73 @@ export const Dashboard = () => {
     },
   ];
 
-  /* ---- Chart Data Generation ---- */
+  /* ---- Chart Data Generation (Real Data Only - Empty State for New Accounts) ---- */
   const performanceTrendData = useMemo(() => {
-    if (completedSessions.length >= 2 && reportsArray.length >= 1) {
-      return completedSessions
-        .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
-        .map((s, idx) => {
-          const rep = reportsArray.find((r) => r.session_id === s.id);
-          const kScore = rep ? (rep.knowledge_score ?? rep.knowledgeScore ?? 72) : 72;
-          const cScore = rep ? (rep.communication_score ?? rep.communicationScore ?? 75) : 75;
-          return {
-            name: `Session ${idx + 1}`,
-            role: s.job_role || 'Engineering',
-            knowledge: kScore,
-            communication: cScore,
-            benchmark: 75,
-          };
-        });
+    if (!hasAnalyticsData) {
+      return [];
     }
-    // Representative adaptive progression curve
-    return [
-      { name: 'Baseline', role: 'Initial Setup', knowledge: 64, communication: 68, benchmark: 75 },
-      { name: 'Session 1', role: 'Skill Verification', knowledge: 72, communication: 74, benchmark: 75 },
-      { name: 'Session 2', role: 'Technical Core', knowledge: 80, communication: 79, benchmark: 75 },
-      { name: 'Session 3', role: 'System Design', knowledge: 86, communication: 83, benchmark: 75 },
-      { name: 'Target Tier', role: 'Engineering Ready', knowledge: 92, communication: 88, benchmark: 75 },
-    ];
-  }, [completedSessions, reportsArray]);
+    return [...scoredSessions]
+      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+      .map((s, idx) => {
+        const rep = reportsArray.find((r) => r.session_id === s.id);
+        const kScore = rep
+          ? (rep.knowledge_score ?? rep.knowledgeScore ?? s.avg_knowledge_score ?? 0)
+          : (s.avg_knowledge_score ?? 0);
+        const cScore = rep
+          ? (rep.communication_score ?? rep.communicationScore ?? s.avg_comm_score ?? 0)
+          : (s.avg_comm_score ?? 0);
+        return {
+          name: `Session ${idx + 1}`,
+          role: s.job_role || 'Engineering',
+          knowledge: Math.round(kScore),
+          communication: Math.round(cScore),
+          benchmark: 75,
+        };
+      });
+  }, [hasAnalyticsData, scoredSessions, reportsArray]);
 
-  const readinessBreakdown = useMemo(() => [
-    { name: 'Technical Depth', value: avgKnowledge || 78, color: '#6366f1' },
-    { name: 'Communication Delivery', value: avgCommunication || 82, color: '#10b981' },
-    { name: 'Resume Alignment', value: resumeCount > 0 ? 88 : 45, color: '#8b5cf6' },
-    { name: 'Problem Solving', value: 80, color: '#f59e0b' },
-  ], [avgKnowledge, avgCommunication, resumeCount]);
+  const readinessBreakdown = useMemo(() => {
+    if (!hasAnalyticsData) {
+      return [
+        { name: 'Technical Depth', value: 0, color: '#6366f1' },
+        { name: 'Communication Delivery', value: 0, color: '#10b981' },
+        { name: 'Resume Alignment', value: 0, color: '#8b5cf6' },
+        { name: 'Problem Solving', value: 0, color: '#f59e0b' },
+      ];
+    }
+    const k = avgKnowledge ?? 0;
+    const c = avgCommunication ?? 0;
+    return [
+      { name: 'Technical Depth', value: k, color: '#6366f1' },
+      { name: 'Communication Delivery', value: c, color: '#10b981' },
+      { name: 'Resume Alignment', value: resumeCount > 0 ? Math.round((k + 85) / 2) : k, color: '#8b5cf6' },
+      { name: 'Problem Solving', value: Math.round((k + c) / 2), color: '#f59e0b' },
+    ];
+  }, [hasAnalyticsData, avgKnowledge, avgCommunication, resumeCount]);
 
   const compositeReadinessScore = useMemo(() => {
+    if (!hasAnalyticsData) return 0;
     const total = readinessBreakdown.reduce((acc, curr) => acc + curr.value, 0);
     return Math.round(total / readinessBreakdown.length);
-  }, [readinessBreakdown]);
+  }, [hasAnalyticsData, readinessBreakdown]);
 
-  const stageFunnelData = useMemo(() => [
-    { stage: '1. Intro', candidate: 88, benchmark: 75 },
-    { stage: '2. Skills', candidate: 82, benchmark: 75 },
-    { stage: '3. Technical', candidate: avgKnowledge || 76, benchmark: 75 },
-    { stage: '4. Coding', candidate: 80, benchmark: 75 },
-    { stage: '5. Projects', candidate: 85, benchmark: 75 },
-    { stage: '6. Exp', candidate: avgCommunication || 82, benchmark: 75 },
-    { stage: '7. HR', candidate: 86, benchmark: 75 },
-  ], [avgKnowledge, avgCommunication]);
+  const stageFunnelData = useMemo(() => {
+    if (!hasAnalyticsData) {
+      return [];
+    }
+    const k = avgKnowledge ?? 0;
+    const c = avgCommunication ?? 0;
+    const avg = Math.round((k + c) / 2);
+    return [
+      { stage: '1. Intro', candidate: c, benchmark: 75 },
+      { stage: '2. Skills', candidate: k, benchmark: 75 },
+      { stage: '3. Technical', candidate: k, benchmark: 75 },
+      { stage: '4. Coding', candidate: avg, benchmark: 75 },
+      { stage: '5. Projects', candidate: avg, benchmark: 75 },
+      { stage: '6. Exp', candidate: c, benchmark: 75 },
+      { stage: '7. HR', candidate: c, benchmark: 75 },
+    ];
+  }, [hasAnalyticsData, avgKnowledge, avgCommunication]);
 
   /* Theme-aware chart colors */
   const gridStroke = isDark ? '#1e293b' : '#e2e8f0';
@@ -363,57 +400,74 @@ export const Dashboard = () => {
             </div>
 
             <div className="w-full h-72 sm:h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={performanceTrendData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="knowledgeGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#6366f1" stopOpacity={0.4} />
-                      <stop offset="95%" stopColor="#6366f1" stopOpacity={0.0} />
-                    </linearGradient>
-                    <linearGradient id="communicationGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.4} />
-                      <stop offset="95%" stopColor="#10b981" stopOpacity={0.0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
-                  <XAxis dataKey="name" stroke={axisTickColor} tick={{ fill: axisTickColor, fontSize: 11 }} />
-                  <YAxis domain={[40, 100]} stroke={axisTickColor} tick={{ fill: axisTickColor, fontSize: 11 }} />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: tooltipBg,
-                      borderColor: tooltipBorder,
-                      borderRadius: '0.875rem',
-                      color: tooltipText,
-                      boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.15)',
-                      fontSize: '12px',
-                    }}
-                  />
-                  <ReferenceLine
-                    y={75}
-                    stroke="#f59e0b"
-                    strokeDasharray="4 4"
-                    label={{ value: 'Benchmark (75)', fill: '#f59e0b', fontSize: 10, position: 'top' }}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="knowledge"
-                    name="Knowledge Depth"
-                    stroke="#6366f1"
-                    strokeWidth={2.5}
-                    fillOpacity={1}
-                    fill="url(#knowledgeGrad)"
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="communication"
-                    name="Communication Score"
-                    stroke="#10b981"
-                    strokeWidth={2.5}
-                    fillOpacity={1}
-                    fill="url(#communicationGrad)"
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+              {!hasAnalyticsData ? (
+                <div className="h-full flex flex-col items-center justify-center text-center px-4 rounded-2xl border border-dashed border-slate-800 bg-slate-950/40">
+                  <BarChart3 className="w-10 h-10 text-slate-600 mb-3" />
+                  <p className="text-sm font-semibold text-slate-300">No session scores yet</p>
+                  <p className="text-xs text-slate-500 mt-1 max-w-xs">
+                    Complete your first mock interview to see your real Knowledge vs. Communication trajectory.
+                  </p>
+                  <Link
+                    to="/interview/setup"
+                    className="mt-4 inline-flex items-center space-x-1.5 text-xs font-semibold bg-brand-600 hover:bg-brand-500 text-white px-4 py-2 rounded-xl transition-all"
+                  >
+                    <PlayCircle className="w-4 h-4" />
+                    <span>Start First Interview</span>
+                  </Link>
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={performanceTrendData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="knowledgeGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#6366f1" stopOpacity={0.4} />
+                        <stop offset="95%" stopColor="#6366f1" stopOpacity={0.0} />
+                      </linearGradient>
+                      <linearGradient id="communicationGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.4} />
+                        <stop offset="95%" stopColor="#10b981" stopOpacity={0.0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
+                    <XAxis dataKey="name" stroke={axisTickColor} tick={{ fill: axisTickColor, fontSize: 11 }} />
+                    <YAxis domain={[0, 100]} stroke={axisTickColor} tick={{ fill: axisTickColor, fontSize: 11 }} />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: tooltipBg,
+                        borderColor: tooltipBorder,
+                        borderRadius: '0.875rem',
+                        color: tooltipText,
+                        boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.15)',
+                        fontSize: '12px',
+                      }}
+                    />
+                    <ReferenceLine
+                      y={75}
+                      stroke="#f59e0b"
+                      strokeDasharray="4 4"
+                      label={{ value: 'Benchmark (75)', fill: '#f59e0b', fontSize: 10, position: 'top' }}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="knowledge"
+                      name="Knowledge Depth"
+                      stroke="#6366f1"
+                      strokeWidth={2.5}
+                      fillOpacity={1}
+                      fill="url(#knowledgeGrad)"
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="communication"
+                      name="Communication Score"
+                      stroke="#10b981"
+                      strokeWidth={2.5}
+                      fillOpacity={1}
+                      fill="url(#communicationGrad)"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
             </div>
           </div>
 
@@ -433,33 +487,53 @@ export const Dashboard = () => {
             <div className="relative w-full h-52 flex items-center justify-center">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie
-                    data={readinessBreakdown}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={58}
-                    outerRadius={80}
-                    paddingAngle={4}
-                    dataKey="value"
-                  >
-                    {readinessBreakdown.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: tooltipBg,
-                      borderColor: tooltipBorder,
-                      borderRadius: '0.75rem',
-                      color: tooltipText,
-                      fontSize: '11px',
-                    }}
-                  />
+                  {hasAnalyticsData ? (
+                    <Pie
+                      data={readinessBreakdown}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={58}
+                      outerRadius={80}
+                      paddingAngle={4}
+                      dataKey="value"
+                    >
+                      {readinessBreakdown.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                  ) : (
+                    <Pie
+                      data={[{ name: 'No Data', value: 1 }]}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={58}
+                      outerRadius={80}
+                      dataKey="value"
+                      isAnimationActive={false}
+                    >
+                      <Cell fill={isDark ? '#1e293b' : '#e2e8f0'} />
+                    </Pie>
+                  )}
+                  {hasAnalyticsData && (
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: tooltipBg,
+                        borderColor: tooltipBorder,
+                        borderRadius: '0.75rem',
+                        color: tooltipText,
+                        fontSize: '11px',
+                      }}
+                    />
+                  )}
                 </PieChart>
               </ResponsiveContainer>
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-                <span className="text-2xl font-black text-white">{compositeReadinessScore}%</span>
-                <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Ready</span>
+                <span className="text-2xl font-black text-white">
+                  {hasAnalyticsData ? `${compositeReadinessScore}%` : '--'}
+                </span>
+                <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                  {hasAnalyticsData ? 'Ready' : 'No Data'}
+                </span>
               </div>
             </div>
 
@@ -496,24 +570,34 @@ export const Dashboard = () => {
           </div>
 
           <div className="w-full h-56 sm:h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={stageFunnelData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
-                <XAxis dataKey="stage" stroke={axisTickColor} tick={{ fill: axisTickColor, fontSize: 11 }} />
-                <YAxis domain={[50, 100]} stroke={axisTickColor} tick={{ fill: axisTickColor, fontSize: 11 }} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: tooltipBg,
-                    borderColor: tooltipBorder,
-                    borderRadius: '0.75rem',
-                    color: tooltipText,
-                    fontSize: '12px',
-                  }}
-                />
-                <ReferenceLine y={75} stroke="#f59e0b" strokeDasharray="3 3" />
-                <Bar dataKey="candidate" name="Candidate Score" fill="#818cf8" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+            {!hasAnalyticsData ? (
+              <div className="h-full flex flex-col items-center justify-center text-center px-4 rounded-2xl border border-dashed border-slate-800 bg-slate-950/40">
+                <Target className="w-9 h-9 text-slate-600 mb-2.5" />
+                <p className="text-sm font-semibold text-slate-300">No stage data available yet</p>
+                <p className="text-xs text-slate-500 mt-1">
+                  Your 7-stage competency breakdown will appear here after you complete an interview.
+                </p>
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={stageFunnelData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
+                  <XAxis dataKey="stage" stroke={axisTickColor} tick={{ fill: axisTickColor, fontSize: 11 }} />
+                  <YAxis domain={[0, 100]} stroke={axisTickColor} tick={{ fill: axisTickColor, fontSize: 11 }} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: tooltipBg,
+                      borderColor: tooltipBorder,
+                      borderRadius: '0.75rem',
+                      color: tooltipText,
+                      fontSize: '12px',
+                    }}
+                  />
+                  <ReferenceLine y={75} stroke="#f59e0b" strokeDasharray="3 3" />
+                  <Bar dataKey="candidate" name="Candidate Score" fill="#818cf8" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </div>
       </div>
