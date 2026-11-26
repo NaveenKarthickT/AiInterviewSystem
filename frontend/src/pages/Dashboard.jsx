@@ -128,9 +128,10 @@ export const Dashboard = () => {
 
   const reportsArray = Array.isArray(reports) ? reports : [];
 
-  // Use reports first, fall back to session averages for completed/scored sessions
+  // Only sessions that actually have scores > 0
   const scoredSessions = sessions.filter(
-    (s) => s.status === 'completed' || (s.avg_knowledge_score > 0 || s.avg_comm_score > 0)
+    (s) => (s.avg_knowledge_score != null && s.avg_knowledge_score > 0) ||
+            (s.avg_comm_score != null && s.avg_comm_score > 0)
   );
 
   const knowledgeScores =
@@ -160,7 +161,7 @@ export const Dashboard = () => {
       ? Math.round(communicationScores.reduce((a, b) => a + b, 0) / communicationScores.length)
       : null;
 
-  const hasAnalyticsData = scoredSessions.length > 0 || reportsArray.length > 0;
+  const hasAnalyticsData = (scoredSessions.length > 0 && (avgKnowledge !== null || avgCommunication !== null)) || reportsArray.length > 0;
 
   const computedStats = [
     {
@@ -228,7 +229,7 @@ export const Dashboard = () => {
     return [
       { name: 'Technical Depth', value: k, color: '#6366f1' },
       { name: 'Communication Delivery', value: c, color: '#10b981' },
-      { name: 'Resume Alignment', value: resumeCount > 0 ? Math.round((k + 85) / 2) : k, color: '#8b5cf6' },
+      { name: 'Resume Alignment', value: resumeCount > 0 ? Math.min(100, Math.round((k * 0.6 + c * 0.4))) : k, color: '#8b5cf6' },
       { name: 'Problem Solving', value: Math.round((k + c) / 2), color: '#f59e0b' },
     ];
   }, [hasAnalyticsData, avgKnowledge, avgCommunication, resumeCount]);
@@ -544,7 +545,7 @@ export const Dashboard = () => {
                   <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: item.color }} />
                   <div className="truncate">
                     <span className="text-xs font-semibold text-slate-200 block truncate">{item.name}</span>
-                    <span className="text-[11px] text-slate-400">{item.value}%</span>
+                    <span className="text-[11px] text-slate-400">{hasAnalyticsData ? `${item.value}%` : '--'}</span>
                   </div>
                 </div>
               ))}

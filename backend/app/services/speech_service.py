@@ -1,21 +1,24 @@
 import os
 import io
+import base64
 import uuid
-from typing import Optional, Dict, Any
+from typing import Optional
 from app.core.config import settings
-from app.agents.llm_factory import llm_factory
 
 
 class SpeechService:
     """Service handling Speech-to-Text (STT) transcription and Text-to-Speech (TTS) synthesis.
-    
-    Supports OpenAI Whisper, Gemini audio analysis, and reliable native audio processors.
+
+    Priority order:
+    1. OpenAI Whisper (if OPENAI_API_KEY set)
+    2. Gemini audio understanding (if GEMINI_API_KEY set)
+    3. Fallback marker string (no cloud key)
     """
 
     @staticmethod
     def transcribe_audio(file_bytes: bytes, filename: str) -> str:
         """Transcribe audio file bytes to text."""
-        # 1. Try OpenAI Whisper if OPENAI_API_KEY is configured
+        # 1. Try OpenAI Whisper
         if settings.OPENAI_API_KEY:
             try:
                 import httpx
@@ -30,14 +33,59 @@ class SpeechService:
                     timeout=30.0,
                 )
                 if response.status_code == 200:
-                    result = response.json()
-                    return result.get("text", "").strip()
+                    return response.json().get("text", "").strip()
             except Exception as e:
-                print(f"[WARN] OpenAI Whisper transcription failed: {e}. Using fallback audio processor.")
+                print(f"[WARN] OpenAI Whisper transcription failed: {e}. Trying Gemini STT.")
 
-        # 2. Native audio file length & envelope verification
-        # When running locally without cloud STT keys or during offline tests,
-        # returns clear transcribed confirmation message indicating audio capture
+        # 2. Try Gemini audio understanding (via google-genai SDK)
+        if settings.GEMINI_API_KEY:
+            try:
+                from google import genai
+                from google.genai import types as genai_types
+
+                client = genai.Client(api_key=settings.GEMINI_API_KEY)
+
+                # Determine MIME type from filename
+                ext = os.path.splitext(filename)[1].lower()
+                mime_map = {
+                    ".webm": "audio/webm",
+                    ".mp3": "audio/mpeg",
+                    ".wav": "audio/wav",
+                    ".ogg": "audio/ogg",
+                    ".m4a": "audio/mp4",
+                    ".flac": "audio/flac",
+                }
+                mime_type = mime_map.get(ext, "audio/webm")
+
+                # Encode audio as base64 inline part
+                audio_part = genai_types.Part.from_bytes(
+                    data=file_bytes,
+                    mime_type=mime_type,
+                )
+
+                response = client.models.generate_content(
+                    model="gemini-2.0-flash-lite",
+                    contents=[
+                        genai_types.Content(
+                            parts=[
+                                genai_types.Part(text=(
+                                    "You are a speech-to-text transcription engine. "
+                                    "Transcribe ONLY what is spoken in this audio clip exactly as heard. "
+                                    "Output ONLY the transcribed text with no explanations, no labels, no commentary."
+                                )),
+                                audio_part,
+                            ]
+                        )
+                    ],
+                )
+
+                text = response.text.strip() if response.text else ""
+                if text:
+                    return text
+            except Exception as e:
+                print(f"[WARN] Gemini STT failed: {e}. No transcription available.")
+
+        # 3. No cloud STT configured — return marker so frontend can show helpful message
         audio_size_kb = len(file_bytes) / 1024.0
         return f"[Audio Response Recorded: {round(audio_size_kb, 1)} KB received from {filename}]"
 
@@ -51,11 +99,7 @@ class SpeechService:
                     "Authorization": f"Bearer {settings.OPENAI_API_KEY}",
                     "Content-Type": "application/json",
                 }
-                payload = {
-                    "model": "tts-1",
-                    "input": text[:4000],
-                    "voice": voice,
-                }
+                payload = {"model": "tts-1", "input": text[:4000], "voice": voice}
                 response = httpx.post(
                     "https://api.openai.com/v1/audio/speech",
                     headers=headers,
@@ -71,3 +115,4 @@ class SpeechService:
 
 
 speech_service = SpeechService()
+
